@@ -109,8 +109,22 @@ jobs:
               # Extract fixed version from the finding object (if available)
               FIXED_VERSION=$(jq -r ".[] | select(.finding.osv == \"$ID\") | .finding.fixed_version // \"N/A\"" govuln-results.json | head -n 1)
 
-              # Extract code positions
-              POSITIONS=$(jq -r ".[] | select(.finding.osv == \"$ID\") | .finding.trace[]? | select(.position != null) | \"- \`\(.position.filename):\(.position.line)\` (Function: \`\(.function)\`)\"" govuln-results.json | sort -u)
+              # Extract code positions, filtering for files present in the cloned repo
+              POSITIONS=""
+              # Get raw trace info: filename|line|function
+              RAW_POSITIONS=$(jq -r ".[] | select(.finding.osv == \"$ID\") | .finding.trace[]? | select(.position != null) | \"\(.position.filename)|\(.position.line)|\(.function)\"" govuln-results.json | sort -u)
+              
+              while IFS='|' read -r FNAME LINE FUNC; do
+                if [ -z "$FNAME" ]; then continue; fi
+                # Check if file exists in the cloned repository (target-source)
+                if [ -f "target-source/$FNAME" ]; then
+                   POSITIONS+="- \`$FNAME:$LINE\` (Function: \`$FUNC\`)"$'\n'
+                fi
+              done <<< "$RAW_POSITIONS"
+
+              if [ -z "$POSITIONS" ]; then
+                  POSITIONS="_No specific lines in the scanned source code were identified (vulnerability likely in dependencies)._"
+              fi
 
               TITLE="Security: $ID in $TARGET_REPO"
               
