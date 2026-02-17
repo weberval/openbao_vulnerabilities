@@ -1,3 +1,11 @@
 [
-  "openbao/openbao"
+  "openbao/openbao",
+  "openbao/openbao-k8s",
+  "openbao/openbao-csi-provider",
+  "openbao/go-kms-wrapping",
+  "openbao/openbao-plugin-secrets-oauthapp",
+  "openbao/openbao-plugins",
+  "openbao/go-secure-stdlib",
+  "openbao/openbao-secrets-operator",
+  "openbao/openbao-plugin-auth-jwt"
 ]

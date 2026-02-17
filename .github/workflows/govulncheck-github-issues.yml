@@ -6,15 +6,40 @@ on:
   workflow_dispatch:
 
 jobs:
-  scan-repositories:
+  # Job 1: Read the configuration file and generate the job matrix
+  load-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout Configuration
+        uses: actions/checkout@v4
+
+      - name: Load Repository List
+        id: set-matrix
+        run: |
+          if [ ! -f repositories.json ]; then
+            echo "::error::repositories.json not found."
+            exit 1
+          fi
+          # Read the JSON file and output it as a compact string for the matrix
+          MATRIX_JSON=$(jq -c . repositories.json)
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+
+  # Job 2: Run the scan for each repository in parallel
+  scan-repository:
+    needs: load-targets
     runs-on: ubuntu-latest
     permissions:
       issues: write
       contents: read
-    steps:
-      - name: Checkout local code
-        uses: actions/checkout@v4
+    strategy:
+      fail-fast: false # If one scan fails, don't stop the others
+      max-parallel: 5   # Limit parallelism to avoid rate limiting on Issue creation
+      matrix:
+        repo: ${{ fromJson(needs.load-targets.outputs.matrix) }}
 
+    steps:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -23,52 +48,62 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
-      - name: Process Repositories
+      - name: Scan ${{ matrix.repo }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ matrix.repo }}
+          REPORT_REPO: ${{ github.repository }}
         run: |
-          if [ ! -f repositories.json ]; then
-            echo "Error: repositories.json not found."
-            exit 1
+          echo "------------------------------------------------------"
+          echo "Scanning: $TARGET_REPO"
+          echo "------------------------------------------------------"
+
+          # Clone the target repository
+          git clone --depth 1 "https://github.com/$TARGET_REPO.git" target-source || { echo "Failed to clone $TARGET_REPO"; exit 1; }
+
+          pushd target-source > /dev/null
+          # Run govulncheck with -format json
+          govulncheck -format json ./... > ../govuln-stream.json || true
+          popd > /dev/null
+
+          # If no results file was created or it's empty, exit early
+          if [ ! -s govuln-stream.json ]; then
+            echo "No results generated."
+            exit 0
           fi
 
-          REPOS=$(jq -r '.[]' repositories.json)
+          # Consolidate the streaming JSON objects into a single JSON array
+          jq -s '.' govuln-stream.json > govuln-results.json
 
-          for REPO in $REPOS; do
-            echo "------------------------------------------------------"
-            echo "Scanning External Repository: $REPO"
-            echo "------------------------------------------------------"
+          # 1. Identify IDs of vulnerabilities that have a trace with a specific position.
+          # We filter specifically for traces that contain a 'position' field (filename/line number).
+          # Since govuln-results.json is now an array, we use '.[] |' to iterate elements.
+          AFFECTING_IDS=$(jq -r '.[] | select(.finding.trace[]?.position != null) | .finding.osv' govuln-results.json | sort -u)
 
-            DIR_NAME="repo_$(echo $REPO | tr '/' '_')"
-            mkdir -p "$DIR_NAME"
+          if [ -z "$AFFECTING_IDS" ]; then
+            echo "No reachable vulnerabilities found."
+            exit 0
+          fi
 
-            # Clone external repo
-            git clone --depth 1 "https://github.com/$REPO.git" "$DIR_NAME" || { echo "Failed to clone $REPO"; continue; }
+          for ID in $AFFECTING_IDS; do
+            # 2. Extract metadata for each specific ID from the 'osv' objects
+            # Using '.[] |' again to handle the array structure
+            VULN_DATA=$(jq -c ".[] | select(.osv != null and .osv.id == \"$ID\") | .osv" govuln-results.json | head -n 1)
+            
+            if [ -z "$VULN_DATA" ]; then continue; fi
 
-            pushd "$DIR_NAME" > /dev/null
-            govulncheck -json ./... > ../govuln-results.json || true
-            popd > /dev/null
+            SUMMARY=$(echo "$VULN_DATA" | jq -r '.summary // "No summary available"')
+            DETAILS=$(echo "$VULN_DATA" | jq -r '.details // "No details available"')
+            
+            TITLE="Security: $ID in $TARGET_REPO"
+            
+            # 3. Check for existing open issues in the REPORT_REPO
+            EXISTS=$(gh issue list --repo "$REPORT_REPO" --search "$ID $TARGET_REPO" --state open --json title --jq '.[0].title')
 
-            if [ -s govuln-results.json ]; then
-              # Extract OSV findings
-              VULNS=$(jq -c 'select(.osv != null) | .osv' govuln-results.json || echo "")
-
-              if [ -n "$VULNS" ]; then
-                echo "$VULNS" | while read -r vuln; do
-                  ID=$(echo "$vuln" | jq -r '.id')
-                  SUMMARY=$(echo "$vuln" | jq -r '.summary // "No summary available"')
-                  DETAILS=$(echo "$vuln" | jq -r '.details // "No details available"')
-                  
-                  # Title includes the external repo name for clarity
-                  TITLE="Security: $ID in $REPO"
-                  
-                  # Check for existing open issues in the CURRENT repository using inlined context
-                  EXISTS=$(gh issue list --repo "${{ github.repository }}" --search "$ID $REPO" --state open --json title --jq '.[0].title')
-
-                  if [ "$EXISTS" = "null" ] || [ -z "$EXISTS" ]; then
-                    BODY=$(cat <<EOF
-          ### govulncheck Finding
-          - **Target Repository:** [$REPO](https://github.com/$REPO)
+            if [ -z "$EXISTS" ] || [ "$EXISTS" = "null" ]; then
+              BODY=$(cat <<EOF
+          ### govulncheck Finding (REACHABLE)
+          - **Target Repository:** [$TARGET_REPO](https://github.com/$TARGET_REPO)
           - **Vulnerability ID:** [$ID](https://pkg.go.dev/vuln/$ID)
           
           ### Summary
@@ -78,20 +113,12 @@ jobs:
           $DETAILS
 
           ---
-          *Note: This issue was generated by the central scanner monitoring external dependencies.*
+          *Note: govulncheck has confirmed that the source code in $TARGET_REPO contains a reachable call path to this vulnerability.*
           EOF
           )
-                    echo "Creating issue for $ID ($REPO) in ${{ github.repository }}..."
-                    gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" --label "security,govulncheck,vulnerability"
-                  else
-                    echo "Issue for $ID in $REPO already exists in ${{ github.repository }}. Skipping."
-                  fi
-                done
-              else
-                echo "No vulnerabilities found for $REPO."
-              fi
+              echo "Creating issue for $ID..."
+              gh issue create --repo "$REPORT_REPO" --title "$TITLE" --body "$BODY" --label "security,govulncheck,vulnerability"
+            else
+              echo "Issue for $ID already exists. Skipping."
             fi
-
-            rm -rf "$DIR_NAME"
-            rm -f govuln-results.json
           done
