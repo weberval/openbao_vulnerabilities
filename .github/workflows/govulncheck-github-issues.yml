@@ -47,7 +47,7 @@ jobs:
 
       - name: Prepare Artifact Name
         run: |
-          SAFE_NAME=$(echo "${{ matrix.repo.name }}" | tr '/' '-')
+          SAFE_NAME=$(echo "${{ matrix.repo.name }}/${{ matrix.repo.branch }}" | tr '/' '-')
           echo "REPO_SAFE_NAME=$SAFE_NAME" >> $GITHUB_ENV
 
       - name: Scan Repository and Generate Report
