@@ -220,7 +220,9 @@ jobs:
                 echo "$EXISTING_NUMBER" >> active_issue_numbers.txt
               else
                 echo "  [CREATE] New Issue ($ID)"
-                gh issue create --repo "$REPORT_REPO" --title "$TITLE" --body "$BODY" --label "security,govulncheck,vulnerability"
+                NEW_ISSUE_URL=$(gh issue create --repo "$REPORT_REPO" --title "$TITLE" --body "$BODY" --label "security,govulncheck,vulnerability")
+                NEW_ISSUE_NUM=$(basename "$NEW_ISSUE_URL")
+                echo "$NEW_ISSUE_NUM" >> active_issue_numbers.txt
                 sleep 1
               fi
             done
@@ -229,9 +231,6 @@ jobs:
             jq -c '.[]' open_issues.json | while read -r OPEN_ISSUE; do
               ISSUE_NUM=$(echo "$OPEN_ISSUE" | jq -r '.number')
               ISSUE_TITLE=$(echo "$OPEN_ISSUE" | jq -r '.title')
-
-              # Ensure we only touch issues for the current repo context
-              if [[ "$ISSUE_TITLE" != *"$TARGET_REPO"* ]]; then continue; fi
 
               if ! grep -q "^$ISSUE_NUM$" active_issue_numbers.txt; then
                 echo "  [CLOSE] Issue #$ISSUE_NUM (Fixed)"
