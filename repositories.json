@@ -1,11 +1,38 @@
 [
-  "openbao/openbao",
-  "openbao/openbao-k8s",
-  "openbao/openbao-csi-provider",
-  "openbao/go-kms-wrapping",
-  "openbao/openbao-plugin-secrets-oauthapp",
-  "openbao/openbao-plugins",
-  "openbao/go-secure-stdlib",
-  "openbao/openbao-secrets-operator",
-  "openbao/openbao-plugin-auth-jwt"
+  {
+    "name": "openbao/openbao",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-k8s",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-csi-provider",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/go-kms-wrapping",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-plugin-secrets-oauthapp",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-plugins",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/go-secure-stdlib",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-secrets-operator",
+    "branch": "main"
+  },
+  {
+    "name": "openbao/openbao-plugin-auth-jwt",
+    "branch": "main"
+  }
 ]

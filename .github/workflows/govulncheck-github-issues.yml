@@ -47,19 +47,20 @@ jobs:
 
       - name: Prepare Artifact Name
         run: |
-          SAFE_NAME=$(echo "${{ matrix.repo }}" | tr '/' '-')
+          SAFE_NAME=$(echo "${{ matrix.repo.name }}" | tr '/' '-')
           echo "REPO_SAFE_NAME=$SAFE_NAME" >> $GITHUB_ENV
 
       - name: Scan Repository and Generate Report
         env:
-          TARGET_REPO: ${{ matrix.repo }}
+          TARGET_REPO: ${{ matrix.repo.name }}
+          TARGET_BRANCH: ${{ matrix.repo.branch }}
         run: |
           echo "------------------------------------------------------"
-          echo "Scanning: $TARGET_REPO"
+          echo "Scanning: $TARGET_REPO (Branch: $TARGET_BRANCH)"
           echo "------------------------------------------------------"
 
-          # 1. Clone the target repository
-          git clone --depth 1 "https://github.com/$TARGET_REPO.git" target-source || { echo "Failed to clone $TARGET_REPO"; exit 1; }
+          # 1. Clone the target repository on the specified branch
+          git clone --depth 1 --branch "$TARGET_BRANCH" "https://github.com/$TARGET_REPO.git" target-source || { echo "Failed to clone $TARGET_REPO on branch $TARGET_BRANCH"; exit 1; }
 
           pushd target-source > /dev/null
           govulncheck -format json ./... > ../govuln-stream.json || true
@@ -74,12 +75,12 @@ jobs:
           # 2. Consolidate and Pre-process Data
           # Merge streaming output into a structured list of unique vulnerabilities
           jq -s '
-            # Create lookup map for OSV definitions
+            # Create a lookup map for OSV definitions { "GO-202X-XXXX": { ... } }
             ([ .[] | select(.osv != null) | {key: .osv.id, value: .osv} ] | from_entries) as $osv_defs
             | 
             # Filter findings that have a trace with a position
             [ .[] | select(.finding.trace[]?.position != null) ]
-            # Group by Vulnerability ID
+            # Group by Vulnerability ID to combine multiple traces for the same issue
             | group_by(.finding.osv)
             | map({
                 id: .[0].finding.osv,
@@ -96,6 +97,9 @@ jobs:
           ' govuln-stream.json > vulnerabilities.json
 
           # 3. Generate Findings Stream (Optimized Loop)
+          # Initialize the final findings array
+          echo "[]" > findings.json
+
           # Iterate over vulnerabilities and verify file existence
           jq -c '.[]' vulnerabilities.json | while read -r VULN; do
             ID=$(echo "$VULN" | jq -r '.id')
@@ -117,15 +121,17 @@ jobs:
               fi
             done)
 
+            # If no positions were found within the repo source (e.g. only in deps), skip or mark generic
             if [ -z "$POSITIONS" ]; then
                 POSITIONS="_No specific lines in the scanned source code were identified (vulnerability likely in dependencies)._"
             fi
 
             TITLE="Security: $ID in $TARGET_REPO"
             
+            # Construct the Markdown Body
             BODY=$(cat <<EOF
           ### govulncheck Finding (REACHABLE)
-          - **Target Repository:** [$TARGET_REPO](https://github.com/$TARGET_REPO)
+          - **Target Repository:** [$TARGET_REPO](https://github.com/$TARGET_REPO) (Branch: \`$TARGET_BRANCH\`)
           - **Vulnerability ID:** [$ID](https://pkg.go.dev/vuln/$ID)
           - **Fixed In:** $FIXED_VERSION
           
