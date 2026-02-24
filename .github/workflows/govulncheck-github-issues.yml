@@ -126,7 +126,7 @@ jobs:
                 POSITIONS="_No specific lines in the scanned source code were identified (vulnerability likely in dependencies)._"
             fi
 
-            TITLE="Security: $ID in $TARGET_REPO"
+            TITLE="Security: $ID in $TARGET_REPO/$TARGET_BRANCH"
             
             # Construct the Markdown Body
             BODY=$(cat <<EOF
@@ -202,7 +202,7 @@ jobs:
             gh issue list \
               --repo "$REPORT_REPO" \
               --label "govulncheck" \
-              --search "$TARGET_REPO in:title" \
+              --search "$TARGET_REPO/$TARGET_BRANCH in:title" \
               --state open \
               --json number,title > open_issues.json
             
